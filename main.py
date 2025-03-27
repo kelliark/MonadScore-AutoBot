@@ -26,14 +26,7 @@ def auto_referral():
     show_banner_referral()
     
     use_proxy_input = input(f"{Fore.CYAN}Use proxy for referral mode? (y/n): {Style.RESET_ALL}").strip().lower()
-    referral_proxy = None
-    if use_proxy_input == 'y':
-        proxies = read_proxies()
-        if proxies:
-            referral_proxy = random.choice(proxies)
-            print(f"{Fore.MAGENTA}Using proxy: {referral_proxy}{Style.RESET_ALL}")
-        else:
-            print(f"{Fore.RED}No proxies found in proxy.txt. Continuing without proxy.{Style.RESET_ALL}")
+    proxies = read_proxies() if use_proxy_input == 'y' else []
     
     codes = read_codes()
     if codes:
@@ -54,7 +47,14 @@ def auto_referral():
     
     for i in range(count):
         print(f"\n{Fore.CYAN}Creating account {i+1}/{count}{Style.RESET_ALL}")
-        ip = get_public_ip(referral_proxy)
+        current_proxy = proxies[i % len(proxies)] if proxies else None
+        proxies_dict = {"http": current_proxy, "https": current_proxy} if current_proxy else None
+        if current_proxy:
+            print(f"{Fore.MAGENTA}Using proxy: {current_proxy}{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.YELLOW}No proxy used.{Style.RESET_ALL}")
+        
+        ip = get_public_ip(current_proxy)[0]
         print(f"{Fore.YELLOW}Ip used: {ip}{Style.RESET_ALL}")
         wallet = generate_wallet()
         print(f"{Fore.YELLOW}Generated Wallet: {wallet['address']}{Style.RESET_ALL}")
@@ -62,7 +62,6 @@ def auto_referral():
         print(f"{Fore.CYAN}Registering account...{Style.RESET_ALL}")
         try:
             payload = {"wallet": wallet["address"], "invite": referral}
-            proxies_dict = {"http": referral_proxy, "https": referral_proxy} if referral_proxy else None
             resp = requests.post("https://mscore.onrender.com/user", json=payload,
                                  headers=get_headers(), timeout=50, proxies=proxies_dict)
             data = resp.json()
@@ -86,10 +85,10 @@ def auto_referral():
             continue
         
         # Claim tasks
-        claim_tasks(wallet, referral_proxy)
+        claim_tasks(wallet, current_proxy)
         
         # Start the node immediately after referral
-        success_node, node_msg, _ = update_start_time(wallet, referral_proxy)
+        success_node, node_msg, _ = update_start_time(wallet, current_proxy)
         print(f"{Fore.YELLOW}Running Node...{Style.RESET_ALL}")
         if success_node:
             print(f"{Fore.GREEN}{node_msg}{Style.RESET_ALL}")
@@ -111,14 +110,29 @@ def auto_run_node():
     proxy_choice = input(f"{Fore.CYAN}Enter your choice (1/2/3): {Style.RESET_ALL}").strip()
     
     base_proxies = []
-    proxy = None
-    if proxy_choice in ["1", "2"]:
+    # If Monosans mode is selected, fetch proxies from GitHub and write to freeproxy.txt
+    if proxy_choice == "1":
+        try:
+            url = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"
+            response = requests.get(url, timeout=30)
+            if response.status_code == 200:
+                proxies_list = [line.strip() for line in response.text.splitlines() if line.strip()]
+                with open("freeproxy.txt", "w") as f:
+                    for proxy in proxies_list:
+                        f.write(proxy + "\n")
+                base_proxies = proxies_list
+                print(f"{Fore.GREEN}Fetched {len(base_proxies)} proxies from Monosans.{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}Failed to fetch proxies from Monosans. Status code: {response.status_code}{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}Error fetching proxies from Monosans: {e}{Style.RESET_ALL}")
+    elif proxy_choice == "2":
         base_proxies = read_proxies()
         if not base_proxies:
             print(f"{Fore.RED}No proxies found in proxy.txt. Running without proxies.{Style.RESET_ALL}")
             proxy_choice = "3"
-        elif proxy_choice == "2":
-            proxy = base_proxies.pop(0)
+    
+    last_refresh = time.time()
     
     while True:
         accounts = read_accounts()
@@ -128,27 +142,51 @@ def auto_run_node():
         
         total_accounts = len(accounts)
         print(f"{Fore.CYAN}Found {total_accounts} account(s) in accounts.json.{Style.RESET_ALL}")
-        last_refresh = time.time()
         
         for i, account in enumerate(accounts):
             print(f"\n{Fore.CYAN}Account {i+1}/{total_accounts}{Style.RESET_ALL}")
             current_proxy = None
-            if proxy_choice == "1":
-                if time.time() - last_refresh > 300:
-                    base_proxies = read_proxies()
+            if proxy_choice in ["1", "2"]:
+                if proxy_choice == "1" and time.time() - last_refresh > 300:
+                    try:
+                        url = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"
+                        response = requests.get(url, timeout=30)
+                        if response.status_code == 200:
+                            proxies_list = [line.strip() for line in response.text.splitlines() if line.strip()]
+                            with open("freeproxy.txt", "w") as f:
+                                for proxy in proxies_list:
+                                    f.write(proxy + "\n")
+                            base_proxies = proxies_list
+                            print(f"{Fore.GREEN}Re-fetched {len(base_proxies)} proxies from Monosans.{Style.RESET_ALL}")
+                        else:
+                            print(f"{Fore.RED}Failed to re-fetch proxies. Status code: {response.status_code}{Style.RESET_ALL}")
+                    except Exception as e:
+                        print(f"{Fore.RED}Error re-fetching proxies: {e}{Style.RESET_ALL}")
                     last_refresh = time.time()
-                if base_proxies:
-                    current_proxy = random.choice(base_proxies)
-            elif proxy_choice == "2":
-                current_proxy = proxy
-
-            # Use fallback proxies in get_public_ip call.
+                # For each account, try to select a working proxy by starting at an offset based on i
+                working_proxy = None
+                for offset in range(len(base_proxies)):
+                    candidate = base_proxies[(i + offset) % len(base_proxies)]
+                    ip_candidate, used_candidate = get_public_ip(candidate)
+                    if used_candidate == candidate:
+                        working_proxy = candidate
+                        break
+                current_proxy = working_proxy
+            print(f"{Fore.MAGENTA}Using proxy: {current_proxy}{Style.RESET_ALL}" if current_proxy else f"{Fore.YELLOW}No proxy used.{Style.RESET_ALL}")
+            
             ip, used_proxy = get_public_ip(current_proxy, fallback_proxies=base_proxies)
-            if used_proxy and used_proxy != current_proxy:
-                current_proxy = used_proxy
+            # If the current proxy fails (i.e. used_proxy is not current_proxy), try to find another working proxy
+            if used_proxy != current_proxy:
+                for offset in range(len(base_proxies)):
+                    candidate = base_proxies[(i + offset) % len(base_proxies)]
+                    ip_candidate, used_candidate = get_public_ip(candidate)
+                    if used_candidate == candidate:
+                        current_proxy = candidate
+                        ip, used_proxy = ip_candidate, used_candidate
+                        print(f"{Fore.MAGENTA}Switched proxy to: {current_proxy}{Style.RESET_ALL}")
+                        break
             print(f"{Fore.YELLOW}Ip Used: {ip}{Style.RESET_ALL}")
             
-            # Print "Running Node..." on its own line
             print(f"{Fore.YELLOW}Running Node...{Style.RESET_ALL}")
             attempt = 0
             success_flag = False
@@ -157,18 +195,16 @@ def auto_run_node():
             while attempt < 3 and not success_flag:
                 success_flag, message, totalPoints = update_start_time(account, current_proxy)
                 if not success_flag:
-                    if proxy_choice in ["1", "2"]:
-                        available = read_proxies()
-                        if available:
-                            current_proxy = random.choice(available)
+                    for offset in range(len(base_proxies)):
+                        candidate = base_proxies[(i + offset) % len(base_proxies)]
+                        ip_candidate, used_candidate = get_public_ip(candidate)
+                        if used_candidate == candidate:
+                            current_proxy = candidate
                             print(f"{Fore.MAGENTA}Proxy failed; switching to: {current_proxy}{Style.RESET_ALL}")
-                        else:
-                            print(f"{Fore.RED}No alternative proxies available; proceeding without proxy.{Style.RESET_ALL}")
-                            current_proxy = None
+                            break
                     attempt += 1
                 else:
                     break
-            # Print node result on a new line
             print(f"{Fore.YELLOW}{message}{Style.RESET_ALL}")
             print(f"{Fore.GREEN}Total Points: {totalPoints}{Style.RESET_ALL}")
             
