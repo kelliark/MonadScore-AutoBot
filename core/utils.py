@@ -56,7 +56,7 @@ def get_public_ip(proxy=None, fallback_proxies=None):
                 data = resp.json()
                 return data.get("query", "IP not found"), p
         except Exception as e:
-            print(f"Error fetching IP with proxy {p}: {e}")
+            print(f"{Fore.RED}Error fetching IP with proxy {p}: {e}{Style.RESET_ALL}")
             continue
     # Finally, try without any proxy
     try:
